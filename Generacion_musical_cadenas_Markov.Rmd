@@ -1,0 +1,189 @@
+---
+title: "Generación Musical con Cadenas de Markov"
+author: "Miguel Bande Rodríguez"
+date: "2024-03-28"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## En primer lugar instalemos y ejecutemos las librerías necesarias:
+
+```{r liberrías necedsarias}
+
+#install.packages("XML")
+
+library(tidyverse) ##Sirve para ordenar los datos, colocarlos, tenerlos bonitos, etc.
+
+library(tidytext) ##Es lo mismo que la anterior solo que para texto (puede quitar acentos, poner todo en minúsculas, etc.)
+
+library(textclean) ##Sirve tb para limpiar texto, eliminar palabras sin sentido
+
+library(markovchain) ##Pues esta será para las cadenas de Markov 
+
+library(dplyr)
+
+library(XML) ##Sirve para poder leer archivos XML en R
+
+library(xml2)
+
+library(xml2)
+
+
+##Sobre todo nos centraremos en XML y en markovchain
+```
+
+## Carguemos los archivos necesarios
+
+Importemos los archivos musicXML que necesitamos usar:
+
+```{r datos1, echo=FALSE}
+
+ruta_del_archivo <- "/Users/miguelbande/Library/CloudStorage/OneDrive-UniversidadComplutensedeMadrid(UCM)/Matemáticas y estadística 0035/4º de carrera/APRS/Trabajom APRS/Archivos musicales/Cancion_gift.musicXML"
+
+partitura_xml <- xmlParse(ruta_del_archivo)
+
+#print(partitura_xml)
+
+notas <- getNodeSet(partitura_xml, "//note")
+
+# Crea una función para obtener la información de la nota como cadena de texto
+obtener_informacion_nota <- function(nota) {
+  # Extrae la información de la nota
+  pitch <- xpathSApply(nota, "./pitch", xmlValue)
+  step <- xpathSApply(nota, "./pitch/step", xmlValue)
+  octave <- xpathSApply(nota, "./pitch/octave", xmlValue)
+  duration <- xpathSApply(nota, "./duration", xmlValue)
+  type <- xpathSApply(nota, "./type", xmlValue)
+  
+  # Combina la información en una cadena de texto
+  info_nota <- paste("Pitch:", pitch, ", Step:", step, ", Octave:", octave, ", Duration:", duration, ", Type:", type)
+  
+  # Retorna la cadena de texto
+  return(info_nota)
+}
+
+# Crea una lista vacía para almacenar la información de las notas
+notas_info <- list()
+
+# Itera sobre cada nodo de nota
+notas <- getNodeSet(partitura_xml, "//note")
+for (nota in notas) {
+  # Obtiene la información de la nota como cadena de texto y agrega a la lista
+  notas_info <- c(notas_info, obtener_informacion_nota(nota))
+}
+
+# Imprime la lista de información de las notas
+#print(notas_info)
+
+
+lista <- unlist(notas_info)
+
+lista[2]
+
+```
+
+## Cadena de Markov
+
+Ahora que ya tenemos nuestros datos en una lista (lo que serán nuestros datos de entrenamiento), pasemos a generar la cadena de Markov
+
+```{r Cadena de Markov}
+
+cadena_generadora <- markovchainFit(lista, method = "laplace")
+
+
+set.seed(123)
+plot(cadena_generadora$estimate)
+
+```
+
+```{r Matriz de transición}
+
+#cadena_generadora$estimate
+
+## Se ve bastante mal porque los nombres son muy largos
+
+```
+
+```{r Generar secuencia a partir de la Cadena de Markov}
+
+
+## Hay que recordar que tenemos fijada una semilla :)
+
+generado = markovchainSequence(n=100,
+                      markovchain = cadena_generadora$estimate,
+                      t0= "Pitch: C4 , Step: C , Octave: 4 , Duration: 1 , Type: eighth",
+                      include.t0 = T)
+
+print(generado)
+
+```
+
+
+
+```{r generacion 3}
+generar_partitura_xml <- function(notas_info, ruta_archivo) {
+  # Crear un nuevo documento XML
+  nuevo_xml <- newXMLDoc()
+
+  # Crear el elemento raíz <score-partwise>
+  raiz <- newXMLNode("score-partwise", doc = nuevo_xml)
+
+  # Agregar atributos necesarios al elemento raíz
+  xmlAttrs(raiz) <- c(xmlns = "http://www.musicxml.org/2008/schema", version = "3.1")
+
+  # Crear la lista de partes
+  part_list <- newXMLNode("part-list", parent = raiz)
+  score_part <- newXMLNode("score-part", attrs = c(id = "P1"), parent = part_list)
+  newXMLNode("part-name", "Parte 1", parent = score_part)
+
+  # Crear la parte
+  part <- newXMLNode("part", attrs = c(id = "P1"), parent = raiz)
+  
+  # Inicializar variables para controlar la duración total de la medida
+  duracion_total <- 0
+  medida <- newXMLNode("measure", attrs = c(number = 1), parent = part)
+
+  # Iterar sobre la lista de información de notas y agregarlas al documento XML
+  for (info_nota in notas_info) {
+    # Extraer la información de la nota
+    pitch <- gsub("Pitch: ", "", info_nota)
+    pitch_info <- strsplit(pitch, ", ")[[1]]
+    step <- gsub("Step: ", "", pitch_info[1])
+    octave <- gsub("Octave: ", "", pitch_info[2])
+    type <- gsub("Type: ", "", pitch_info[3])
+
+    # Crear el nodo nota (note)
+    note <- newXMLNode("note", parent = medida)
+    
+    # Crear el nodo pitch
+    pitch_node <- newXMLNode("pitch", parent = note)
+    newXMLNode("step", step, parent = pitch_node)
+    newXMLNode("octave", octave, parent = pitch_node)
+    
+    # Definir la duración de la nota
+    duration <- ifelse(type == "eighth", 1, ifelse(type == "16th", 0.5, ifelse(type == "quarter", 2, 4)))
+    newXMLNode("duration", duration, parent = note)
+    newXMLNode("type", type, parent = note)
+
+    # Actualizar la duración total de la medida
+    duracion_total <- duracion_total + as.numeric(duration)
+
+    # Si la duración total es mayor o igual a 4, crear una nueva medida
+    if (duracion_total >= 4) {
+      medida <- newXMLNode("measure", attrs = c(number = as.character(xmlSize(getNodeSet(part, "//measure")) + 1)), parent = part)
+      duracion_total <- 0
+    }
+  }
+
+  # Guardar el documento XML en un archivo
+  saveXML(nuevo_xml, file = ruta_archivo)
+}
+
+
+generar_partitura_xml(c(generado), "nuevo.xml")
+
+```
+
